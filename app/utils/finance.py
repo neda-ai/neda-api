@@ -5,10 +5,9 @@ from typing import AsyncGenerator
 
 from aiocache import cached
 from fastapi_mongo_base.utils import basic
+from server.config import Settings
 from ufaas import AsyncUFaaS, exceptions
 from ufaas.apps.saas.schemas import UsageCreateSchema, UsageSchema
-
-from server.config import Settings
 
 resource_variant = getattr(Settings, "UFAAS_RESOURCE_VARIANT", "subtitle")
 

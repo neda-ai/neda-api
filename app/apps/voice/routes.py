@@ -12,6 +12,7 @@ class VoiceModelRouter(AbstractBaseRouter[VoiceModel, VoiceModelSchema]):
             model=VoiceModel,
             schema=VoiceModelSchema,
             user_dependency=jwt_access_security,
+            prefix="/models",
         )
 
     def config_routes(self, **kwargs):

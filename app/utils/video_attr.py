@@ -1,7 +1,6 @@
 import logging
 
 import httpx
-
 from server.config import Settings
 
 

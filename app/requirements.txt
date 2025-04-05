@@ -25,3 +25,6 @@ ufaas
 usso[fastapi]
 
 replicate
+librosa
+# soundfile
+pydub

@@ -27,6 +27,4 @@ class Settings(config.Settings):
         "PROMPTLY_URL", default="https://media.pixiee.io/v1/apps/promptly/ai"
     )
     minutes_price: float = 3  # coin per minute
-    translation_price: float = (
-        2.25  # coins per minute (K tokens) 1.5 output + 0.75 input
-    )
+    convert_voice_price: float = 2.25

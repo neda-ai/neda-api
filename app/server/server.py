@@ -1,7 +1,6 @@
-from fastapi_mongo_base.core import app_factory
-
 from apps.neda.routes import router as neda_router
 from apps.voice.routes import router as voice_router
+from fastapi_mongo_base.core import app_factory
 
 from . import config, worker
 
