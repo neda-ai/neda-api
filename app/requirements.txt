@@ -26,5 +26,6 @@ usso[fastapi]
 
 replicate
 librosa
-# soundfile
+soundfile
 pydub
+praat-parselmouth

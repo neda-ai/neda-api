@@ -8,6 +8,7 @@ from usso.fastapi import jwt_access_security
 from .models import VoiceConvert
 from .schemas import (
     PredictionModelWebhookData,
+    RunpodWebhookData,
     VoiceConvertTaskCreateSchema,
     VoiceConvertTaskSchema,
 )
@@ -36,7 +37,10 @@ class VoiceConvertRouter(AbstractTaskRouter[VoiceConvert, VoiceConvertTaskSchema
         return await super().create_item(request, data.model_dump(), background_tasks)
 
     async def webhook(
-        self, uid: uuid.UUID, request: fastapi.Request, data: PredictionModelWebhookData
+        self,
+        uid: uuid.UUID,
+        request: fastapi.Request,
+        data: PredictionModelWebhookData | RunpodWebhookData,
     ):
         voice_task = await VoiceConvert.get_by_uid(uid)
         await process_convert_voice_webhook(voice_task, data)

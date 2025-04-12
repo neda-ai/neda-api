@@ -1,6 +1,5 @@
 import json
 import uuid
-from io import BytesIO
 
 import ufiles
 from server.config import Settings

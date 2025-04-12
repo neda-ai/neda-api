@@ -1,6 +1,5 @@
 import fastapi
 from fastapi_mongo_base.routes import AbstractBaseRouter
-from usso.fastapi import jwt_access_security
 
 from .models import VoiceModel
 from .schemas import VoiceModelSchema, VoiceTrainingSchema
@@ -11,7 +10,7 @@ class VoiceModelRouter(AbstractBaseRouter[VoiceModel, VoiceModelSchema]):
         super().__init__(
             model=VoiceModel,
             schema=VoiceModelSchema,
-            user_dependency=jwt_access_security,
+            user_dependency=None,
             prefix="/models",
         )
 

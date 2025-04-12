@@ -1,124 +1,112 @@
-import logging
+import os
 from io import BytesIO
 
 import librosa
 import numpy as np
-import pydub
+import parselmouth
+import soundfile
+from pydub import AudioSegment
+from fastapi_mongo_base.utils import texttools
 
 
-# @basic.try_except_wrapper
-def calculate_voice_pitch(voice: BytesIO):
-    """
-    Calculate the average pitch (fundamental frequency) of a voice recording using RMVPE.
+def calculate_voice_pitch_parselmouth(audio: np.ndarray, sr: int) -> np.ndarray:
+    sound = parselmouth.Sound(audio, sampling_frequency=sr)
 
-    Args:
-        voice: BytesIO object containing audio data (supports wav, mp3, ogg formats)
+    pitch_obj = sound.to_pitch(time_step=0.01)  # 100Hz frame rate like RMVPE
 
-    Returns:
-        dict: Contains pitch statistics (mean, min, max, std)
-    """
+    pitch_values = pitch_obj.selected_array["frequency"]  # In Hz
 
+    # Replace unvoiced frames (0 Hz) with NaN or interpolation
+    pitch_values[pitch_values == 0] = np.nan
+    return pitch_values
+
+
+def clean_pitch_values(pitch_values: np.ndarray) -> np.ndarray:
+    # Remove NaNs
+    valid_pitch = pitch_values[~np.isnan(pitch_values)]
+
+    if len(valid_pitch) == 0:
+        return pitch_values  # all NaN, nothing to do
+
+    # Compute quartiles
+    q1 = np.percentile(valid_pitch, 25)
+    q3 = np.percentile(valid_pitch, 75)
+
+    # Midpoint between Q1 and Q3
+    q_average = (q1 + q3) / 2
+
+    mid_range_values = valid_pitch[(valid_pitch >= q1) & (valid_pitch <= q3)]
+
+    return {
+        "min": np.nanmin(pitch_values),
+        "max": np.nanmax(pitch_values),
+        "average": np.nanmean(pitch_values),
+        "median": np.nanmedian(pitch_values),
+        "q1": q1,
+        "q3": q3,
+        "q_average": q_average,
+        "robust_average": np.nanmean(mid_range_values),
+        "robust_median": np.nanmedian(mid_range_values),
+    }
+
+
+def calculate_voice_pitch_crepe(audio: np.ndarray, sr: int) -> np.ndarray:
+    import crepe
+
+    # crepe requires mono, float32, 16kHz
+    if sr != 16000:
+        raise ValueError("CREPE requires 16kHz audio. Resample first.")
+
+    if audio.ndim > 1:
+        audio = audio.mean(axis=1)  # convert to mono
+
+    audio = audio.astype(np.float32)
+
+    _, freqs, confidence, _ = crepe.predict(audio, sr, viterbi=True, step_size=10)
+
+    # Optional: mask low-confidence
+    freqs[confidence < 0.5] = np.nan
+    return freqs
+
+
+def get_voice_array(audio_bytes: BytesIO) -> np.ndarray:
+    audio_bytes.seek(0)
     try:
-        import onnxruntime
-
-        logging.info("started")
-
-        # Convert audio to numpy array
-        audio = pydub.AudioSegment.from_file(voice)
-        audio = audio.set_channels(1)  # Convert to mono
-        audio = audio.set_frame_rate(16000)  # Resample to 16kHz
-        samples = np.array(audio.get_array_of_samples(), dtype=np.float64)
-        samples = samples / samples.max()  # Normalize to [-1, 1]
-
-        def get_frames(x, frame_size=2048, hop_size=160):
-            # Frame the signal into overlapping frames
-            num_frames = 1 + (len(x) - frame_size) // hop_size
-            frames = np.zeros((num_frames, frame_size))
-            for i in range(num_frames):
-                frames[i] = x[i * hop_size : i * hop_size + frame_size]
-            return frames
-
-        def compute_dft(frames):
-            # Compute DFT for each frame
-            window = np.hanning(frames.shape[1])
-            windowed = frames * window
-            fft = np.fft.rfft(windowed)
-            # Take only first 1024 frequency bins to match model's expected input
-            return fft[:, :1024]
-
-        def resize_spec(spec, target_length=128):
-            # Resize spectrogram to match expected input size
-            from scipy.interpolate import interp1d
-
-            current_length = spec.shape[0]
-            if current_length == target_length:
-                return spec
-
-            x_old = np.linspace(0, 1, current_length)
-            x_new = np.linspace(0, 1, target_length)
-            f = interp1d(x_old, spec, axis=0)
-            return f(x_new)
-
-        def resize_spec(spec, target_length=128):
-            # Resize spectrogram to match expected input size
-            from scipy.interpolate import interp1d
-
-            current_length = spec.shape[0]
-            if current_length == target_length:
-                return spec
-
-            x_old = np.linspace(0, 1, current_length)
-            x_new = np.linspace(0, 1, target_length)
-            f = interp1d(x_old, spec, axis=0)
-            return f(x_new)
-
-        logging.info("Calculating pitch")
-
-        # Frame the audio
-        frames = get_frames(samples)
-
-        # Compute spectral features
-        spec = np.abs(compute_dft(frames))
-
-        # Resize to match model's expected input size
-        spec = resize_spec(spec, target_length=128)
-
-        # Add batch dimension and channel dimension
-        spec = spec[np.newaxis, :, :]  # Shape becomes (1, 128, features)
-
-        logging.info(f"Spec shape: {spec.shape}")
-
-        # Load RMVPE ONNX model
-        session = onnxruntime.InferenceSession("rmvpe.onnx")
-
-        # Single inference instead of batching
-        input_name = session.get_inputs()[0].name
-        input_data = {input_name: spec.astype(np.float32)}
-
-        # Run inference
-        output = session.run(None, input_data)
-        f0 = output[0]  # Assuming first output is pitch
-
-        # Filter out unreliable predictions
-        f0 = f0[f0 > 50.0]  # Remove very low frequencies
-        f0 = f0[f0 < 800.0]  # Remove very high frequencies
-
-        if len(f0) == 0:
-            return {"mean": 0, "min": 0, "max": 0, "std": 0}
-
-        return {
-            "mean": float(np.mean(f0)),
-            "min": float(np.min(f0)),
-            "max": float(np.max(f0)),
-            "std": float(np.std(f0)),
-        }
-
+        # Try to read directly with soundfile
+        y, sr = soundfile.read(audio_bytes)
     except Exception as e:
-        import traceback
+        # If soundfile fails, try with pydub to convert to WAV format
+        audio_bytes.seek(0)
+        audio_segment = AudioSegment.from_file(audio_bytes)
+        # Convert to WAV format in memory
+        wav_io = BytesIO()
+        audio_segment.export(wav_io, format="wav")
+        wav_io.seek(0)
+        y, sr = soundfile.read(wav_io)
 
-        traceback_str = "".join(traceback.format_tb(e.__traceback__))
-        logging.error(f"Error calculating pitch: \n\n{traceback_str}\n\n{str(e)}")
-        return {"mean": 0, "min": 0, "max": 0, "std": 0}
+    if len(y.shape) > 1:
+        y = np.mean(y, axis=1)
+
+    y = y.astype(np.float32)
+
+    # Resample to 16kHz for crepe
+    if sr != 16000:
+        y = librosa.resample(y, orig_sr=sr, target_sr=16000)
+        sr = 16000
+
+    return y, sr
+
+
+def get_voice_pitch_crepe(audio_bytes: BytesIO) -> np.ndarray:
+    y, sr = get_voice_array(audio_bytes)
+    pitch_values = calculate_voice_pitch_crepe(y, sr)
+    return clean_pitch_values(pitch_values)
+
+
+def get_voice_pitch_parselmouth(audio_bytes: BytesIO) -> np.ndarray:
+    y, sr = get_voice_array(audio_bytes)
+    pitch_values = calculate_voice_pitch_parselmouth(y, sr)
+    return clean_pitch_values(pitch_values)
 
 
 def calculate_pitch_shift(source_pitch: float, target_pitch: float) -> float:
@@ -132,7 +120,7 @@ def calculate_pitch_shift(source_pitch: float, target_pitch: float) -> float:
     Returns:
         float: Recommended pitch shift value for RVC
     """
-    if source_pitch == 0 or target_pitch == 0:
+    if source_pitch == 0:
         return 0
 
     # Calculate semitone difference
@@ -144,10 +132,47 @@ def calculate_pitch_shift(source_pitch: float, target_pitch: float) -> float:
     return float(pitch_shift)
 
 
+def calculate_pitch_shift_log(source_pitch: float, target_pitch_log: float) -> float:
+    """
+    Calculate the optimal pitch shift for RVC conversion.
+
+    Args:
+        source_pitch: The speaking pitch of the source voice
+        target_pitch: The speaking pitch of the target voice model
+
+    Returns:
+        float: Recommended pitch shift value for RVC
+    """
+    if source_pitch == 0 or target_pitch_log == 0:
+        return 0
+
+    # Calculate semitone difference
+    pitch_shift = 12 * (target_pitch_log - np.log2(source_pitch))
+
+    # Limit the shift to a reasonable range (-12 to +12 semitones)
+    pitch_shift = np.clip(pitch_shift, -12, 12)
+
+    return float(pitch_shift)
+
+
 def get_duration(audio: BytesIO):
-    y, sr = librosa.load(audio)
-    duration_seconds = librosa.get_duration(y=y, sr=sr)
-    return duration_seconds
+    try:
+        # First try with librosa
+        y, sr = librosa.load(audio)
+        duration_seconds = librosa.get_duration(y=y, sr=sr)
+        return duration_seconds
+    except Exception as e:
+        # If librosa fails, try with pydub
+        audio.seek(0)
+        try:
+            audio_segment = AudioSegment.from_file(audio)
+            return len(audio_segment) / 1000.0  # Convert milliseconds to seconds
+        except Exception as e2:
+            # If both methods fail, log the error and return a default duration
+            import logging
+
+            logging.error(f"Failed to get audio duration: {e2}")
+            return 60.0  # Default to 1 minute if we can't determine duration
 
 
 def create_rvc_conversion(
@@ -178,3 +203,58 @@ def create_rvc_conversion(
     )
 
     return rep.id
+
+
+def create_rvc_conversion_runpod(
+    audio: str,
+    model_url: str,
+    pitch: float = 0,
+    webhook_url: str = None,
+):
+    import httpx
+
+    api_key = os.getenv("RUNPOD_API_KEY")
+    runpod_id = os.getenv("RUNPOD_ID")
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+
+    base_url = f"https://api.runpod.ai/v2/{runpod_id}"
+
+    data = {
+        "input": {
+            "protect": 0.5,
+            "rvc_model": "CUSTOM",
+            "index_rate": 0.5,
+            "input_audio": audio,
+            "pitch_change": pitch,
+            "rms_mix_rate": 0.3,
+            "filter_radius": 3,
+            "output_format": "wav",
+            "custom_rvc_model_download_url": model_url,
+            "webhook_url": webhook_url,
+        }
+    }
+
+    with httpx.Client(headers=headers) as client:
+        response = client.post(f"{base_url}/run", json=data)
+        return response.json().get("id")
+
+
+def get_rvc_conversion_runpod_status(job_id: str):
+    import httpx
+
+    api_key = os.getenv("RUNPOD_API_KEY")
+    runpod_id = os.getenv("RUNPOD_ID")
+
+    base_url = f"https://api.runpod.ai/v2/{runpod_id}"
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+
+    response = httpx.get(f"{base_url}/status/{job_id}")
+    return response.json()

@@ -1,9 +1,10 @@
 from datetime import datetime
 from enum import Enum
+from typing import Literal
 
 from fastapi_mongo_base.schemas import OwnedEntitySchema
 from fastapi_mongo_base.tasks import TaskMixin, TaskStatusEnum
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class VoiceConvertStatus(str, Enum):
@@ -40,15 +41,17 @@ class VoiceConvertStatus(str, Enum):
     @property
     def progress(self):
         return {
-            self.__class__.pitch_conversion: 50,
-            self.__class__.voice_change: 100,
+            self.__class__.pitch_conversion: 20,
+            self.__class__.voice_change: 50,
+            self.__class__.completed: 100,
+            self.__class__.error: 100,
         }.get(self, 0)
 
 
 class VoiceConvertTaskCreateSchema(BaseModel):
     url: str
     pitch_difference: float = 0.0
-    target_voice: str
+    target_voice: str 
 
     meta_data: dict | None = None
     webhook_url: str | None = None
@@ -66,7 +69,7 @@ class VoiceConvertTaskSchema(
     estimated_cost: float | None = None
 
     status: VoiceConvertStatus = VoiceConvertStatus.draft
-    replicate_id: str | None = None
+    run_id: str | None = None
     output_url: str | None = None
 
     @property
@@ -85,6 +88,7 @@ class VoiceConvertTaskSchema(
             value = VoiceConvertStatus(value)
         self.status = value
         self.task_status = value.get_task_status()
+        self.task_progress = value.progress
 
     @property
     def filename(self):
@@ -121,6 +125,15 @@ class PredictionModelWebhookData(BaseModel):
     def validate_percentage(cls, item: "PredictionModelWebhookData"):
         item.percentage = item.status.progress
         return item
+
+
+class RunpodWebhookData(BaseModel):
+    output_url: str | None = None
+    created_at: datetime = Field(default_factory=datetime.now)
+    format: Literal["mp3", "wav"] = "wav"
+    message: str | None = None
+    error: str | None = None
+    traceback: str | None = None
 
 
 class VoiceInput(BaseModel):

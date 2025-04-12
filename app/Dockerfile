@@ -2,6 +2,11 @@ FROM python:3.12-slim AS fast-base
 
 WORKDIR /app
 
+# Install system dependencies including ffmpeg
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt requirements.txt
 RUN python -m pip install --no-cache-dir -r requirements.txt 
 
