@@ -50,7 +50,7 @@ class VoiceConvertStatus(str, Enum):
 
 class VoiceConvertTaskCreateSchema(BaseModel):
     url: str
-    pitch_difference: float = 0.0
+    pitch_difference: float | None = None
     target_voice: str 
 
     meta_data: dict | None = None

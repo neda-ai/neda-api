@@ -15,7 +15,7 @@ from .schemas import (
 )
 
 
-@cached(ttl=60)
+@cached(ttl=60 * 10)
 async def get_voice(url: str) -> BytesIO:
     async with httpx.AsyncClient() as client:
         response = await client.get(url)
@@ -24,11 +24,14 @@ async def get_voice(url: str) -> BytesIO:
 
 
 async def register_cost(voice_task: VoiceConvert):
-    duration = voice_task.meta_data.get("duration", 0)
-    price = Settings.minutes_price * duration
-    usage = await finance.meter_cost(voice_task.user_id, amount=price)
-    if usage:
-        return usage
+    try:
+        duration = voice_task.meta_data.get("duration", 0)
+        price = Settings.minutes_price * duration
+        usage = await finance.meter_cost(voice_task.user_id, amount=price)
+        if usage:
+            return usage
+    except Exception as e:
+        logging.error(f"Error registering cost. {voice_task.user_id} {voice_task.uid} {e}")
 
     logging.error(f"Insufficient balance. {voice_task.user_id} {voice_task.id}")
     await voice_task.fail("Insufficient balance.")
@@ -44,7 +47,6 @@ async def convert_voice(voice_task: VoiceConvert, **kwargs):
     usage = await register_cost(voice_task)
 
     if usage is None:
-        await voice_task.fail("Insufficient balance.")
         return
 
     model = await VoiceModel.get_by_slug(voice_task.target_voice)
@@ -59,13 +61,14 @@ async def convert_voice(voice_task: VoiceConvert, **kwargs):
         await voice_task.fail("Model not found.")
         return
 
-    voice_task._status = VoiceConvertStatus.pitch_conversion
-    await voice_task.save()
+    if voice_task.pitch_difference is None:
+        voice_task._status = VoiceConvertStatus.pitch_conversion
+        await voice_task.save()
 
-    pitch_data = voice.get_voice_pitch_parselmouth(await get_voice(voice_task.url))
-    voice_task.pitch_difference = voice.calculate_pitch_shift_log(
-        pitch_data["robust_average"], model.base_pitch
-    )
+        pitch_data = voice.get_voice_pitch_parselmouth(await get_voice(voice_task.url))
+        voice_task.pitch_difference = voice.calculate_pitch_shift_log(
+            pitch_data["robust_average"], model.base_pitch
+        )
 
     run_id = voice.create_rvc_conversion_runpod(
         voice_task.url,

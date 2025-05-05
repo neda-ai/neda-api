@@ -9,7 +9,7 @@ from server.config import Settings
 from ufaas import AsyncUFaaS, exceptions
 from ufaas.apps.saas.schemas import UsageCreateSchema, UsageSchema
 
-resource_variant = getattr(Settings, "UFAAS_RESOURCE_VARIANT", "subtitle")
+resource_variant = getattr(Settings, "UFAAS_RESOURCE_VARIANT", "neda")
 
 
 @asynccontextmanager
@@ -26,6 +26,7 @@ async def get_ufaas_client() -> AsyncGenerator[AsyncUFaaS, None]:
         pass
 
 
+@basic.retry_execution(attempts=2, delay=0.1)
 async def meter_cost(
     user_id: uuid.UUID, amount: float, meta_data: dict = None
 ) -> UsageSchema:
